@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdio.h>
 
 
 #ifdef __cplusplus
@@ -32,7 +33,7 @@ extern "C"
    * The smallest memory block size that can be returned by buddy_malloc value must
    * be large enough to account for the avail header.
    */
-#define SMALLEST_K 6
+#define SMALLEST_K 5
 
 #define BLOCK_AVAIL    1  /*Block is available to allocate*/
 #define BLOCK_RESERVED 0  /*Block has been handed to user*/
