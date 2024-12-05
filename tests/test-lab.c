@@ -66,6 +66,9 @@ void test_buddy_malloc_one_byte(void)
   buddy_init(&pool, size);
   void *mem = buddy_malloc(&pool, 1);
   //Make sure correct kval was allocated
+  struct avail *tmp = (struct avail *)mem - 1;
+  assert(tmp->kval == SMALLEST_K);
+
   buddy_free(&pool, mem);
   check_buddy_pool_full(&pool);
   buddy_destroy(&pool);
@@ -178,7 +181,7 @@ int main(void) {
   UNITY_BEGIN();
   RUN_TEST(test_btok);
   RUN_TEST(test_buddy_init);
-  //RUN_TEST(test_buddy_malloc_one_byte);
+  RUN_TEST(test_buddy_malloc_one_byte);
   RUN_TEST(test_buddy_malloc_one_large);
 return UNITY_END();
 }

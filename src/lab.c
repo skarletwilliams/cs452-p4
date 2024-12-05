@@ -7,6 +7,65 @@
 #include "../src/lab.h"
 #include <sys/mman.h>
 
+//TODO: make a function that takes a void * pointer and a length and sets values to zero
+void buddy_wipe(struct buddy_pool *pool, struct avail * block) {
+  //TODO: WIPE
+}
+
+//TODO: Define in header
+void add_to_avail(struct buddy_pool *pool, struct avail * block, size_t k) {
+  if(block->kval != k) {exit(2);} //Should not be requesting to add a block of incorrect size to wrong list
+
+  printf("Adding to avail[%ld]!\n\tList.OG.next: %ld\n\tList.OG.prev: %ld\n\tBlock address: %ld\n", k, pool->avail[k].next, pool->avail[k].prev, (size_t) block);
+  block->prev = pool->avail[k].prev;
+  block->next = pool->avail[k].next;
+  printf("Ensure new block matches!\n\tblock.next: %ld\n\tblock.prev: %ld\n", block->next, block->prev);
+  pool->avail[k].prev->next = block;
+  pool->avail[k].next->prev = block;
+  pool->avail[k].next = block;
+    printf("New list should point to new block now!!\n\tList.OG.next.prev: %ld\n\tList.OG.prev.next: %ld\n\tAvail[%ld].next: %ld\n", pool->avail[k].next->prev, pool->avail[k].prev->next, k, pool->avail[k].next);
+}
+
+//TODO: Define in header
+void buddy_merge(struct buddy_pool *pool, struct avail *buddy1, struct avail *buddy2) {
+  size_t k = buddy1->kval;
+  if (k != buddy2->kval) { exit(1); } //Shouldn't be requesting to merge buddies that are not buddies!!
+  
+  //Remove buddy 1 from list
+  buddy1->prev->next = buddy1->next;
+  buddy1->next->prev = buddy1->prev;
+
+  //Remove buddy 2 from list
+  buddy2->prev->next = buddy2->next;
+  buddy2->next->prev = buddy2->prev;
+  
+  //Unused block in avail[k] list
+  pool->avail[k].next = &pool->avail[k];
+  pool->avail[k].prev = &pool->avail[k];
+  pool->avail[k].kval = k;
+  pool->avail[k].tag = BLOCK_UNUSED;
+
+  //Available block in avail[k+1] list
+  size_t ptr1 = (size_t)buddy1;
+  size_t ptr2 = (size_t)buddy2;
+  ptr1 &= ~(UINT64_C(1) << k);
+  ptr2 &= ~(UINT64_C(1) << k);
+  if (ptr1 != ptr2) { exit(1); } //These should be the same address!
+
+  k++;
+  struct avail * parent = (struct avail *) ptr1;
+  parent->kval = k;
+  parent->tag = BLOCK_AVAIL;
+  buddy_wipe(pool, parent);
+  add_to_avail(pool, parent, k);
+
+  if(k < pool->kval_m) {
+    printf("Searching for ANOTHER buddy...\n");
+    struct avail * buddy = buddy_calc(pool, parent);
+    if(buddy != NULL) {printf("\tBuddy found!\n");buddy_merge(pool, parent, buddy);}
+  }
+}
+
 size_t btok(size_t bytes) {
   unsigned int count = 0; // For an accurate btok, start at 1. bit shifting in tests is innaccurate
   bytes -= 1;
@@ -18,8 +77,18 @@ size_t btok(size_t bytes) {
 }
 
 struct avail *buddy_calc(struct buddy_pool *pool, struct avail *buddy) {
+  size_t k = buddy->kval;
 
-  return 0;
+  //Check available list to see if the buddy is available.
+  printf("\tI am located at\n\t\t: %ld\n\List %ld contains:\n", (size_t)buddy, k);
+  struct avail * friend = pool->avail[k].next;
+  printf("\t\t: %ld\n", (size_t)friend);
+  printf("\t\t: %ld\n", (size_t)friend->next);
+  printf("\t\t: %ld\n", (size_t)friend->next->next);
+
+  if(friend == buddy && friend->next == buddy) { return NULL; }
+    
+  return friend;
 }
 
 void *buddy_malloc(struct buddy_pool *pool, size_t size) {
@@ -29,48 +98,65 @@ void *buddy_malloc(struct buddy_pool *pool, size_t size) {
   size_t k = btok(size);
   //Fit constraints - you can't accomodate someone asking for larger than max k
   if(k < SMALLEST_K) {k = SMALLEST_K;}
-  struct avail *availBlock = NULL;
+  void *ptr = NULL;
 
   // Find a block that can accomodate this in avail[k] or above
-  for (int i = k; i <= pool->kval_m; i++) {
-    struct avail *next = (struct avail *) pool->avail[i].next; // Skip first block, as it is unusable head.
-    while(next->tag != BLOCK_UNUSED) { //If next is block unused, end of list!
-      if (next->tag == BLOCK_AVAIL) { availBlock = (struct avail *) next; break; } //Found available block, exit while loop 
-      next = (struct avail *) pool->avail[i].next; // Else, next in list
+  for (long unsigned int i = k; i <= pool->kval_m; i++) {
+    struct avail *next = (struct avail *) pool->avail[i].next;
+    while(next->tag != BLOCK_UNUSED) { //If block is unused, end of list!
+      if (next->tag == BLOCK_AVAIL) { ptr = next; break; } //Found available block, exit while loop 
+      next = next->next; // Else, next in list
     }
-    if (availBlock != NULL) {break;} //If block is found, stop searching!
+    if (ptr != NULL) {break;} //If block is found, stop searching!
   }
   
   // No block was found, terminate
-  if (availBlock == NULL) { return NULL;}
+  if (ptr == NULL) { return NULL;}
 
-  // Remove from list
-  availBlock->prev->next = availBlock->next;
-  availBlock->next->prev = availBlock->prev;
-  availBlock->tag = BLOCK_RESERVED;
+  // Reserve Block
+  struct avail *block = (struct avail *) ptr;
+  block->prev->next = block->next;
+  block->next->prev = block->prev;
+  block->tag = BLOCK_RESERVED;
 
-  // If accurate size, terminate and return memory block
-  if (availBlock->kval == k) { return (availBlock + 1);}//Note1: why + 1??? why not + sizeof(struct avail));}
+  while (block->kval != k) {
+    //Divide buddies
+    block->kval--;
 
-  // otherwise split block until requested size
-  for (int i = availBlock->kval; i >= k; i--) {
-
+    // Manage XX100 buddy to add to list
+    void * ptr_r = ptr;
+    ptr_r += UINT64_C(1) << (block->kval); 
+    printf("Splitting in two!--------------------------------------\n");
+    printf("\tI am located at:\n\t\t%ld\n\tMy budddy is located at:\n\t\t%ld\n", ptr, ptr_r);
+    struct avail * block_r = (struct avail *) ptr_r;
+    block_r->tag = BLOCK_AVAIL;
+    block_r->kval = block->kval;
+    add_to_avail(pool, block_r, block_r->kval);
+    printf("Buddy put in list %ld.--------------------------------------\n", block_r->kval);
   }
-
-  return availBlock;
+  
+  return ptr + sizeof(struct avail); 
 }
 
 void buddy_free(struct buddy_pool *pool, void *ptr) {
-  if (ptr == NULL) {return NULL;}
-  struct avail *block = (struct avail *) ptr - 1; // NOTE1: - 1 like in the test?
+  if (ptr == NULL) {return;}
+  ptr -= sizeof(struct avail); // Now points to the block
+  struct avail *block = (struct avail *) ptr;
   size_t k = block->kval;
   block->tag = BLOCK_AVAIL;
+
+  //Wipe buddy
+  buddy_wipe(pool, block);
     
   //Simply add the block after the head
-  block->prev = &pool->avail[k];
-  block->next = pool->avail[k].next;
-  pool->avail[k].next->prev = block;
-  pool->avail[k].next = block;
+  add_to_avail(pool, block, k);
+
+  //If k < pool.kval_m, and buddy is available, merge
+  if(k < pool->kval_m) {
+    printf("Searching for buddy...\n");
+    struct avail * buddy = buddy_calc(pool, block);
+    if(buddy != NULL) {printf("\tBuddy found!\n");buddy_merge(pool, block, buddy);}
+  }
 }
 
 void *buddy_realloc(struct buddy_pool *pool, void *ptr, size_t size)  {
@@ -113,4 +199,3 @@ void buddy_destroy(struct buddy_pool *pool) {
 		perror("buddy: destroy failed!");
 	}
 }
-
